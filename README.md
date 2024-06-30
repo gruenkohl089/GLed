@@ -1,5 +1,7 @@
 # GLed - A led control class
 
+A Arduino Library.
+
 ## Description
 
 The GLed class models an LED. It provides methods to manipulate the LED
