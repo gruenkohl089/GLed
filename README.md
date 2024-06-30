@@ -9,7 +9,7 @@ Some LEDs are switched on by switching the pin that controls the LED to HIGH (3.
 Others light up by switching the control pin to LOW (GND). By abstracting this detail,
 code can be created whose on/off commands are identical for all boards.
 To do this, a GLed object only needs to be told which pin is used and whether
-the switching logic is positive (HIGH) or negative (GND) when it is created.
+the switching logic is positive (HIGH) or negative (LOW) when it is created.
 
 ## Installation
 
