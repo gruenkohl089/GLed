@@ -31,9 +31,9 @@
 #endif
 
 #if CONFIG_FREERTOS_UNICORE
-#define ARDUINO_LED_RUNNING_CORE 0
+#define FLASH_TASK_CORE 0
 #else
-#define ARDUINO_LED_RUNNING_CORE 1
+#define FLASH_TASK_CORE tskNO_AFFINITY
 #endif
 
 /**
@@ -53,14 +53,16 @@ public:
     enum gled_switching_logic_t { LOW_IS_ACTIVE, HIGH_IS_ACTIVE }; ///< switching logic selection type.
 
     static const int MY_LED_BUILDIN = LED_BUILTIN;                 ///< setup for NodeMCU v3 / Wemos d1 mini board & Co.
-    static const int DEFAULT_DELAY_FLASH = 64;                     ///< default on time per flash
-    static const int MAX_FLASH = 100;                              ///< truncate the number a flashes to this value.
+    static const int   DEFAULT_FLASH_ON_TIME = 64;                 ///< default on time per flash [ms]
+    static const int   DEFAULT_FLASH_OFF_TIME = 1000;              ///< default off time per flash [ms]
+    static const int MAX_FLASH = 100;                              ///< syncron flash: truncate the number a flashes to this value.
+    static const uint64_t FLASH_FOR_EVER = (uint64_t)(~0);         ///< number of blink sequences to be made.
 
     /**
      * the GLed standard constructor initializes the object
      * for use with the build in LED for the NodeMCU v3 board.
+     * A negative logic is used to turn on and off the LED.
      * On the "NodeMUC v3" or "WEMOS d1 mini" the build in led is connected to VCC.
-     * So a negative logic is used to turn on and off the LED.
      */
     GLed()
     	: pin(MY_LED_BUILDIN)
@@ -68,7 +70,9 @@ public:
     	, activated(false)
     	, on_is_high_level(false)
     	, flash_count(0)
-		, flash_dt(0)
+		, flash_dt_on(0)
+		, flash_dt_off(0)
+		, flash_task_handle(nullptr)
     {};
 
     /**
@@ -84,8 +88,10 @@ public:
         , activated(false)
         , on_is_high_level(true)
     	, flash_count(0)
-		, flash_dt(0)
-		, flash_task_handle(0)
+		, flash_dt_on(0)
+		, flash_dt_off(0)
+		, flash_task_handle(nullptr)
+
     {};
 
     /**
@@ -102,10 +108,14 @@ public:
         , activated(false)
         , on_is_high_level(a_switch_logic == HIGH_IS_ACTIVE)
     	, flash_count(0)
-		, flash_dt(0)
-    	, flash_task_handle(0)
-    {};
+		, flash_dt_on(0)
+		, flash_dt_off(0)
+    	, flash_task_handle(nullptr)
+    { 
+		set_logic_mode( a_switch_logic );
+	};
 
+	~GLed();
 
     /**
      * must be called before the led may be switched on or off.
@@ -115,9 +125,9 @@ public:
     void begin();
 
     /**
-     * deactivate the LED and switch to off.
-     * If called all output commands to the control pin gets suppressed.
-     * But the status settings like switching logic or reassignments are still allowed.
+     * deactivate the LED and switch to off. A running flash task gets terminated.
+     * All further LED switching commands to the control pin gets ignored.
+     * But status settings like switching logic or reassignments are still allowed.
      */
     void end();
 
@@ -191,35 +201,55 @@ public:
     int get_pin() const { return pin; }
 
     /**
-     * flash - blinking the activated LED.
+     * flash - start blinking of the activated LED for a given number of flashes.
      * Note: flash() conserves the lightening state as it was just when flash() gets called.
      *
      * If "count" is less than 1 no blinking is generated.
      * The call is synchronous and blocks until the blinking is done.
      * A flash() call will return after the blinking sequence has finished.
-     * So the total amount of the delay is for count >= 1:  (2*count-1)*dt  [ms].
-     *  @param count: number of blinks. Count is truncated to maximal MAX_DELAY_FLASH.
-     *  @param dt:    time during which the LED is ON (also OFF) when blinking (ms).
+     * A single flash sequence consists always in the on and off time interval.
+     * So the total amount of the delay is for count >= 1: count*(dt_on+dt_off)  [ms].
+     * @param count: number of blinks. Count is truncated to maximal MAX_DELAY_FLASH.
+     * @param dt_on: time during which the LED is ON when blinking (ms).
+     * @param dt_off: time during which the LED is OFF when blinking (ms). If 0 then dt_on gets used.
      */
-    void flash( unsigned int count = 1, unsigned int dt = DEFAULT_DELAY_FLASH);
+    void flash( unsigned count = 3, unsigned dt_on =   DEFAULT_FLASH_ON_TIME, unsigned dt_off = DEFAULT_FLASH_OFF_TIME );
 
-    /** blinking the activated LED like flash() but none blocking is done.
+    /** start blinking the activated LED like flash() but none blocking is done.
+     *  A thread is started to perform the blinking.
      *  The call of async_flash() will return immediately
      *  and does not wait until the blinking sequence has completed.
+     *  If a previous async_flash() task is already running when an new call is made
+     *  the new count and time values gets set and used within the next blink sequence.
+     *  No further thread is started in such a case.
+     *  The count gets decreased at each blink sequence and the underling thread gets terminated if zero gets reached.  
 	 *  @param count: number of flashes. Count is not truncated !
-     *  @param dt:    time during which the LED is ON (also OFF) when blinking (ms).
+     *  @param dt_on: time during which the LED is ON when blinking (ms).
+     *  @param dt_off: time during which the LED is OFF when blinking (ms). If 0 then dt_on gets used.
      *  @param core_no: core to run the flash thread.
      *  @return pdPASS, if the task was successfully created and added to a ready list,
      *                  otherwise an error code (see xTaskCreatePinnedToCore() for the code).
      */
-    int async_flash( unsigned int count = 13, unsigned int dt = DEFAULT_DELAY_FLASH, int core = ARDUINO_LED_RUNNING_CORE );
+    int async_flash( uint64_t count = FLASH_FOR_EVER, 
+    				 unsigned dt_on = DEFAULT_FLASH_ON_TIME, 
+    				 unsigned dt_off = DEFAULT_FLASH_OFF_TIME, 
+    				 int core = FLASH_TASK_CORE );
+
+	/*
+	 * set the on and off time periods for the flash thread.
+	 * If a flash tread is running the new setting gets used in the next flash period. 
+	 * @param dt_on: time during which the LED is ON when blinking (ms).
+     * @param dt_off: time during which the LED is OFF when blinking (ms). If 0 then dt_on gets used.
+	*/
+    void async_flash_set_time_regime( unsigned dt_on, unsigned dt_off );
+
 
     /**
      * Reassign the pin which is connected to the LED.
      * The object gets reinitialized as off and not activated.
      * You have to activate the LED again using begin() before she can be switched.
-     * \note The (pin) state of the previously controlled LED port remains unchanged.
-     *  You may want to set the LED to off before calling reconnect_to_pin().
+     * \note The gpio pin state of the previously controlled LED pin is set to led off and
+     *       a running flash task gets terminated. But the gpio pin configuration itself is not changed.
      *
      *  @param pin   new controlling GPIO pin.
      *  @param logic if HIGH_IS_ACTIVE it is assumed that the LED is lightening if its gpio port ist HIGH.
@@ -230,10 +260,11 @@ public:
 private:
     int pin;
     int state;
-    bool activated;
+    volatile bool activated;
     bool on_is_high_level;
-    unsigned flash_count;
-    unsigned flash_dt;
+    volatile uint64_t flash_count;
+    volatile unsigned flash_dt_on;
+	volatile unsigned flash_dt_off;
     TaskHandle_t flash_task_handle;
 
 friend
