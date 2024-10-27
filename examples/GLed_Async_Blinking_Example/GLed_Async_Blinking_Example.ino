@@ -8,11 +8,11 @@
 // abstract:       led control
 // premises:
 // remarks:
-// history:        10.04.2020, GJK, created.
+// history:        10.10.2024, GJK, created.
 // AUTHOR:         G.Kasper
 // contact:        info@georgkasper.de
 // copyright:      Georg Kasper
-// file:           GLed_Example.ino
+// file:           GLed_Async_Blinking_Example.ino
 // language:       C++
 // compiler:       g++ (i.e. Arduino IDE compiler)
 //
@@ -55,28 +55,35 @@ void setup()
 
   // activate the pin port for the GLed control.
   gled.begin();
+  gled.async_flash();
 }
 
 void loop()
 {
-  Serial.println("the LED schould now be ON for 3 seconds.");
-  gled.on();
+  static int loop_cnt = 1;
+  static unsigned on_time = GLed::DEFAULT_FLASH_ON_TIME;
+  static unsigned off_time = GLed::DEFAULT_FLASH_OFF_TIME;
+  
+  Serial.println( "the LED schould now be blinking for ever." );
+  Serial.printf( "On: %d ms, Off: %d ms\n", on_time, off_time );
   delay(3000);
 
-  Serial.println("the LED flashes now 20 times every 1 second.");
-  gled.flash(20);
-
-  Serial.println("the LED should now be OFF for 3 seconds.");
-  gled.off();
-  delay(3000);
-
-  Serial.println("the LED schould now be flashing 10 times with a blinking periode of 1 second on, followed by 2 second off.");
-  gled.flash(10, 1000, 2000);
-
-  Serial.println("the LED schould now be OFF for 5 second.");
-  gled.off();
-
+  Serial.printf( "%d: The loop does its job and forgets the flashing LED.\n", loop_cnt );
   delay(5000);
+ 
+  // change the blinking timing - signal something has changed during work:
+  if( loop_cnt % 2 == 0 )
+    // default blinking:
+    on_time = GLed::DEFAULT_FLASH_ON_TIME,
+    off_time = GLed::DEFAULT_FLASH_OFF_TIME;
+  else	
+    // long on (2500ms), interrupted by a shorter off time (700ms). 
+	on_time = 2500,
+    off_time = 700;
+	
+  gled.async_flash_set_time_regime( on_time, off_time );
+  
+  loop_cnt ++;
   Serial.println();
 }
 
